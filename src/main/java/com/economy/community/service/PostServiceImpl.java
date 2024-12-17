@@ -17,8 +17,11 @@ import com.economy.community.repository.PostRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,6 +32,7 @@ public class PostServiceImpl implements PostService {
 
     private final ObjectMapper objectMapper;
     private final KafkaService kafkaService;
+    private final RedissonClient redissonClient;
 
     private final PostRepository postRepository;
     private final PostLikeRepository postLikeRepository;
@@ -109,50 +113,67 @@ public class PostServiceImpl implements PostService {
     @Override
     @Transactional
     public PostLikesResponse toggleLike(Long id, Long userId, String userNickname) {
-        // 게시글 조회
-        Post post = postRepository.findPostById(id);
+        String lockKey = "lock:like:" + userId + ":" + id;
+        RLock lock = redissonClient.getLock(lockKey);
 
-        if (post.getUserId().equals(userId)) {
-            throw new IllegalArgumentException("You cannot like your own post.");
+        try {
+            if (!lock.tryLock(3, 10, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("잠시 후 다시 시도해주세요.");
+            }
+
+            // 게시글 조회
+            Post post = postRepository.findPostById(id);
+
+            if (post.getUserId().equals(userId)) {
+                throw new IllegalArgumentException("You cannot like your own post.");
+            }
+
+            // 좋아요 여부 확인
+            Optional<PostLike> existingLike = postLikeRepository.findByUserIdAndPostId(userId, post.getId());
+
+            boolean isLiked;
+
+            if (existingLike.isEmpty()) {
+                // 중복 방지: Redisson 분산락 1차 방어 + 유니크 제약 조건 2차 방어
+                PostLike newLike = PostLike.builder()
+                        .userId(userId)
+                        .userNickname(userNickname)
+                        .post(post)
+                        .build();
+                postLikeRepository.save(newLike);
+
+                postCacheRepository.incrementLikeCount(id); // Redis에서 좋아요 수 증가
+                isLiked = true;
+
+                // **좋아요 알림 생성**
+                createLikeNotification(post, userNickname);
+
+            } else {
+                // 좋아요 취소
+                PostLike like = existingLike.get();
+                postLikeRepository.delete(like);
+
+                postCacheRepository.decrementLikeCount(id); // Redis에서 좋아요 수 감소
+                isLiked = false;
+            }
+
+            // Redis에서 최신 좋아요 수 가져오기
+            Long updatedLikeCount = postCacheRepository.getLikeCount(id);
+
+            // 좋아요 수 동기화
+            post.syncLikesCount(updatedLikeCount);
+            postRepository.save(post);
+
+            return new PostLikesResponse(isLiked, updatedLikeCount);
+
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("락 대기 중 인터럽트 발생", e);
+        } finally {
+            if (lock.isHeldByCurrentThread()) {
+                lock.unlock();
+            }
         }
-
-        // 좋아요 여부 확인
-        Optional<PostLike> existingLike = postLikeRepository.findByUserIdAndPostId(userId, post.getId());
-
-        boolean isLiked;
-
-        if (existingLike.isEmpty()) {
-            // 중복 방지: 유니크 제약 조건을 통해 데이터베이스 레벨에서 중복 방지
-            PostLike newLike = PostLike.builder()
-                    .userId(userId)
-                    .userNickname(userNickname)
-                    .post(post)
-                    .build();
-            postLikeRepository.save(newLike);
-
-            postCacheRepository.incrementLikeCount(id); // Redis에서 좋아요 수 증가
-            isLiked = true;
-
-            // **좋아요 알림 생성**
-            createLikeNotification(post, userNickname);
-
-        } else {
-            // 좋아요 취소
-            PostLike like = existingLike.get();
-            postLikeRepository.delete(like);
-
-            postCacheRepository.decrementLikeCount(id); // Redis에서 좋아요 수 감소
-            isLiked = false;
-        }
-
-        // Redis에서 최신 좋아요 수 가져오기
-        Long updatedLikeCount = postCacheRepository.getLikeCount(id);
-
-        // 좋아요 수 동기화
-        post.syncLikesCount(updatedLikeCount);
-        postRepository.save(post);
-
-        return new PostLikesResponse(isLiked, updatedLikeCount);
     }
 
     private void createLikeNotification(Post post, String likerNickname) {

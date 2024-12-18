@@ -106,10 +106,12 @@ public class PostController {
         return ResponseEntity.ok(likedPosts);
     }
 
-    // 게시글 조회수 증가
+    // 게시글 조회수 증가 (userId 기반 중복 조회 차단)
     @GetMapping("/{id}/view")
-    public ResponseEntity<Long> postView(@PathVariable Long id) {
-        Long updatedViewCount = postViewCountService.incrementPostViewCount(id);
+    public ResponseEntity<Long> postView(@PathVariable Long id,
+                                         @RequestHeader String Authorization) {
+        Long userId = tokenProvider.getUserIdFromToken(Authorization);
+        Long updatedViewCount = postViewCountService.incrementPostViewCount(id, userId);
         return ResponseEntity.ok(updatedViewCount);
     }
 

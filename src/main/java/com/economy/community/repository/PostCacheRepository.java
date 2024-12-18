@@ -1,14 +1,9 @@
 package com.economy.community.repository;
 
-import com.economy.community.domain.Notification;
 import com.economy.community.dto.PostResponse;
-import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -41,9 +36,6 @@ public class PostCacheRepository implements CacheRepository {
 
     private final RedisTemplate<String, Object> redisTemplate;
     private final StringRedisTemplate stringRedisTemplate;
-
-    // 사용자별 알림 리스트를 관리하는 맵
-    private final Map<Long, List<Notification>> notifications = new ConcurrentHashMap<>();
 
     @Override
     public String getCacheKey() {
@@ -139,19 +131,4 @@ public class PostCacheRepository implements CacheRepository {
         }
     }
 
-    // 알림 저장
-    public void addNotification(Long userId, String message, Long postId, String details) {
-        Notification notification = new Notification(postId, message, details, LocalDateTime.now());
-        notifications.computeIfAbsent(userId, k -> Collections.synchronizedList(new ArrayList<>())).add(notification);
-    }
-
-    // 사용자별 알림 조회
-    public List<Notification> getNotifications(Long userId) {
-        return notifications.getOrDefault(userId, new ArrayList<>());
-    }
-
-    // 사용자별 알림 삭제
-    public void deleteNotifications(Long userId) {
-        notifications.remove(userId);
-    }
 }

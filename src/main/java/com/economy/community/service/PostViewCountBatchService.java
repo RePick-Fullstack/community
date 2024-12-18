@@ -48,7 +48,7 @@ public class PostViewCountBatchService {
             if (rawValue != null) {
                 long increment = Long.parseLong(rawValue);
                 if (increment > 0) {
-                    postRepository.updatePostViewCount(postId, increment);
+                    postRepository.updatePostViewCount(postId, (int) increment);
                 }
             }
         }

@@ -43,15 +43,19 @@ public class Post extends BaseEntity {
     @Enumerated(EnumType.STRING)
     private CommunityCategory category;
 
+    @Builder.Default
     @Column(name = "like_count")
     private Long likesCount = 0L;
 
+    @Builder.Default
     @Column(name = "view_count")
     private Long viewCount = 0L;
 
+    @Builder.Default
     @Column(name = "comment_count")
     private Long commentsCount = 0L;
 
+    @Builder.Default
     @Column(name = "deleted")
     @NotNull
     private boolean deleted = false;

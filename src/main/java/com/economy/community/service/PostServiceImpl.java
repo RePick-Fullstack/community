@@ -2,6 +2,7 @@ package com.economy.community.service;
 
 import com.economy.community.domain.CommentEvent;
 import com.economy.community.domain.CommunityCategory;
+import com.economy.community.domain.NotificationEntity;
 import com.economy.community.domain.Post;
 import com.economy.community.domain.PostLike;
 import com.economy.community.dto.CreatePostRequest;
@@ -11,6 +12,8 @@ import com.economy.community.dto.PostLikesResponse;
 import com.economy.community.dto.PostResponse;
 import com.economy.community.dto.UpdatePostRequest;
 import com.economy.community.dto.UpdatePostResponse;
+import com.economy.community.event.NotificationCreatedEvent;
+import com.economy.community.repository.NotificationRepository;
 import com.economy.community.repository.PostCacheRepository;
 import com.economy.community.repository.PostLikeRepository;
 import com.economy.community.repository.PostRepository;
@@ -22,6 +25,7 @@ import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,6 +41,8 @@ public class PostServiceImpl implements PostService {
     private final PostRepository postRepository;
     private final PostLikeRepository postLikeRepository;
     private final PostCacheRepository postCacheRepository;
+    private final NotificationRepository notificationRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Override
     @Transactional(readOnly = true)
@@ -177,12 +183,12 @@ public class PostServiceImpl implements PostService {
     }
 
     private void createLikeNotification(Post post, String likerNickname) {
-        // 게시글 작성자에게 알림 생성 (자신이 자신의 게시글에 좋아요를 누른 경우 제외)
         if (!post.getUserId().equals(post.getId())) {
-            String notificationMessage = likerNickname + "님이 내 게시글에 좋아요를 눌렀습니다.";
-            String notificationDetails = "게시글 제목: " + post.getTitle() + "\n게시글 내용: " + post.getContent();
-            postCacheRepository.addNotification(post.getUserId(), notificationMessage, post.getId(),
-                    notificationDetails);
+            String message = likerNickname + "님이 내 게시글에 좋아요를 눌렀습니다.";
+            String details = "게시글 제목: " + post.getTitle() + "\n게시글 내용: " + post.getContent();
+            notificationRepository.save(NotificationEntity.builder()
+                    .userId(post.getUserId()).postId(post.getId()).message(message).details(details).build());
+            eventPublisher.publishEvent(new NotificationCreatedEvent(post.getUserId()));
         }
     }
 
@@ -200,6 +206,7 @@ public class PostServiceImpl implements PostService {
                 .collect(Collectors.toList());
     }
 
+    @Transactional
     @KafkaListener(topics = "comment-topic", groupId = "post-service-group")
     public void handleCommentEvent(byte[] message) {
         try {
@@ -223,16 +230,15 @@ public class PostServiceImpl implements PostService {
     }
 
     private void createCommentNotification(CommentEvent event) {
-        // 게시글 조회
         Post post = postRepository.findPostById(event.getPostId());
         if (post == null) {
             throw new IllegalArgumentException("게시글이 존재하지 않습니다.");
         }
-
-        // 댓글 작성 알림 생성
-        String notificationMessage = event.getUserNickname() + "님이 내 게시글에 댓글을 작성했습니다.";
-        String notificationDetails = "댓글 내용: " + event.getContent();
-        postCacheRepository.addNotification(post.getUserId(), notificationMessage, post.getId(), notificationDetails);
+        String message = event.getUserNickname() + "님이 내 게시글에 댓글을 작성했습니다.";
+        String details = "댓글 내용: " + event.getContent();
+        notificationRepository.save(NotificationEntity.builder()
+                .userId(post.getUserId()).postId(post.getId()).message(message).details(details).build());
+        eventPublisher.publishEvent(new NotificationCreatedEvent(post.getUserId()));
     }
 
 }
